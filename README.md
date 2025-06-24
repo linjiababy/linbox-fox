@@ -1,5 +1,6 @@
 #linbox-fox
 用afei项目:linbox 对其进行一定程度的压缩和删减，同时做一些个人优化。不喜欢请支持正主Afeimod
+  感谢mobox开发人员，感谢咔咔龙，Afei，Asai，deemo等大佬支持和指导
 
 下载所有文件，放在/sdcard/目录下，termux执行bash /sdcard/foxbox.sh文件，然后就可以一键安装了
 
