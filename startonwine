@@ -1,0 +1,212 @@
+#!/usr/bin/bash
+# 作者：咔咔龙…修改者 afei fox deespk等
+# 版本:v2.5.1
+
+export LC_ALL="$(cat /data/data/com.termux/files/usr/glibc/opt/locale.conf 2>/dev/null)"
+. /data/data/com.termux/files/usr/glibc/opt/scripts/configs 2>/dev/null
+. /data/data/com.termux/files/usr/glibc/opt/conf/wine_path.conf 2>/dev/null
+. /data/data/com.termux/files/usr/glibc/opt/conf/wine_path1.conf 2>/dev/null
+load_configs 2>/dev/null
+
+LOG_PATH="/sdcard/wine_log.txt"
+
+show_error() {
+    echo "[$(date)] ERROR: $1" >> "$LOG_PATH"
+    exit 1
+}
+
+[ -z "$DISPLAY" ] && export DISPLAY=:0
+unset LD_PRELOAD
+
+export PATH=/data/data/com.termux/files/usr/glibc/bin:$PATH
+export BOX64_PATH=$WINE_PATH/bin
+export BOX86_PATH=$BOX64_PATH
+export BOX64_LD_LIBRARY_PATH=$WINEPATH/lib/wine/i386-unix:$WINEPATH/lib/wine/x86_64-unix
+export BOX86_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH
+
+eval "set -- $(getopt -o d::a:hwb5 --long desktop::,args:,help,debug,wow64,f5taskmgr -- "$@" 2>/dev/null)" || {
+    echo "[$(date)] ERROR: 参数解析失败" >> "$LOG_PATH"
+    exit 1
+}
+
+while :; do
+    case "$1" in
+        -d|--desktop)
+            if [ -z "$2" ]; then
+                resolution=(explorer /desktop=shell,800x600)
+            else
+                [[ "$2" =~ ^[0-9]+x[0-9]+$ ]] || {
+                    echo "[$(date)] ERROR: 分辨率格式错误" >> "$LOG_PATH"
+                    exit 1
+                }
+                resolution=(explorer /desktop=shell,$2)
+            fi
+            shift
+            ;;
+        -a|--args) wine_args+=( "$2" ); shift ;;
+        --debug) out=; shift ;;
+        -w|--wow64) wow64=1; shift ;;
+        -b) shift ;;
+        -5|--f5taskmgr) f5taskmgr=1; shift ;;
+        --) shift; break ;;
+        *) echo "[$(date)] ERROR: 无效参数 $1" >> "$LOG_PATH"; exit 1 ;;
+    esac
+    shift
+done
+
+if [ "$#" -lt 1 ] && [ -z "${wine_args[*]}" ]; then
+    exit 0  
+fi
+
+[ -f "$*" ] && set -- start /unix "$(realpath "$*" 2>/dev/null)"
+
+if [ -d $WINE_PATH/lib/wine/i386-unix ]; then
+    wine=wine64
+    if [ $wow64 ]; then
+        mv -f /data/data/com.termux/files/usr/glibc/bin/box86 /data/data/com.termux/files/usr/glibc/bin/box86.bak 2>/dev/null
+    else
+        patchelf --force-rpath --set-rpath /data/data/com.termux/files/usr/glibc/lib32 \
+                 --set-interpreter /data/data/com.termux/files/usr/glibc/lib32/ld-linux-armhf.so.3 \
+                 /data/data/com.termux/files/usr/glibc/bin/box86 2>/dev/null
+    fi
+else
+    wine=wine
+fi
+
+patchelf --force-rpath --set-rpath /data/data/com.termux/files/usr/glibc/lib \
+         --set-interpreter /data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 \
+         /data/data/com.termux/files/usr/glibc/bin/box64 2>/dev/null
+
+[ -e /data/data/com.termux/files/usr/glibc/opt/virgl/virgl-enabled ] && \
+    ! pgrep -f libvirgl_test_server.so >/dev/null && \
+    /data/data/com.termux/files/usr/glibc/opt/virgl/libvirgl_test_server.so &>/dev/null &
+
+! pgrep -x pulseaudio >/dev/null && \
+    pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 &>/dev/null
+
+. /data/data/com.termux/files/usr/glibc/opt/conf/wine_path.conf
+taskset -c $PRIMARY_CORES true 2>/dev/null || \
+    echo "[$(date)] WARNING: 无法绑定CPU核心 $PRIMARY_CORES" >> "$LOG_PATH"
+
+build_wine() {
+    local update_timestamp_file="$WINEPREFIX/.update-timestamp"
+    [ "$(cat "$update_timestamp_file" 2>/dev/null)" = "disable" ] && return
+
+    {
+        rm -rf "$WINEPREFIX"
+        unset BOX64_DYNAREC_BIGBLOCK WINEESYNC WINEESYNC_TERMUX BOX64_DYNAREC_CALLRET
+        
+        [ -e "$WINE_PATH/lib/wine/i386-windows/shell32-bak.dll" ] && \
+            mv "$WINE_PATH/lib/wine/i386-windows/shell32-bak.dll" "$WINE_PATH/lib/wine/i386-windows/shell32.dll" 2>/dev/null
+        [ -e "$WINE_PATH/lib64/wine/x86_64-windows/shell32-bak.dll" ] && \
+            mv "$WINE_PATH/lib64/wine/x86_64-windows/shell32-bak.dll" "$WINE_PATH/lib64/wine/x86_64-windows/shell32.dll" 2>/dev/null
+
+        WINEDLLOVERRIDES="mscoree=disabled" "${taskset[@]}" box64 "$wine" wineboot -u &>"${LOG_PATH}_wineboot.txt" || {
+            echo "[$(date)] ERROR: wineboot失败" >> "$LOG_PATH"
+            box64 wineserver -k 2>/dev/null
+            exit 1
+        }
+
+        7z x /data/data/com.termux/files/usr/glibc/opt/prefix/drive_c.7z -o"$WINEPREFIX/drive_c" -y &>>"${LOG_PATH}_wineboot.txt"
+        7z x /data/data/com.termux/files/usr/glibc/opt/prefix/directx.7z -o"$WINEPREFIX/drive_c" -y &>>"${LOG_PATH}_wineboot.txt"
+        
+        mkdir -p "$WINEPREFIX/drive_c/ProgramData/Microsoft/Windows/Start Menu"
+        cp -r /data/data/com.termux/files/usr/glibc/opt/prefix/start/* "$WINEPREFIX/drive_c/ProgramData/Microsoft/Windows/Start Menu" 2>/dev/null
+        
+        rm -rf "$WINEPREFIX/dosdevices/z:"
+        ln -sf /data/data/com.termux/files "$WINEPREFIX/dosdevices/z:" 2>/dev/null
+        ln -sf /sdcard "$WINEPREFIX/dosdevices/d:" 2>/dev/null
+        ln -sf /sdcard/exagear "$WINEPREFIX/dosdevices/e:" 2>/dev/null
+        
+        cp /data/data/com.termux/files/usr/glibc/opt/prefix/marlett.ttf "$WINEPREFIX/drive_c/windows/Fonts" 2>/dev/null
+        
+        "${taskset[@]}" box64 "$wine" regedit /data/data/com.termux/files/usr/glibc/opt/prefix/user.reg &>>"${LOG_PATH}_wineboot.txt"
+        "${taskset[@]}" box64 "$wine" regedit /data/data/com.termux/files/usr/glibc/opt/prefix/system.reg &>>"${LOG_PATH}_wineboot.txt"
+        "${taskset[@]}" box64 "$wine" regedit /data/data/com.termux/files/usr/glibc/opt/prefix/fix-services.reg &>>"${LOG_PATH}_wineboot.txt"
+        tar -xf /data/data/com.termux/files/usr/glibc/opt/prefix/fix-fonts.tar.xz -C "$WINEPREFIX/drive_c/windows" &>>"${LOG_PATH}_wineboot.txt"
+        
+        if [ ! "$STARTUP_COMPATIBILITY_MODE" = "1" ]; then
+            "${taskset[@]}" box64 "$wine" explorer /desktop=shell,640x480 start /unix /data/data/com.termux/files/usr/glibc/opt/apps/install.bat &>"${LOG_PATH}_redist.txt"
+            box64 wineserver -k 2>/dev/null
+            
+            if [ ! -e /data/data/com.termux/files/usr/glibc/opt/virgl/virgl-enabled ]; then
+                tar -xf /data/data/com.termux/files/usr/glibc/opt/dxvk/dxvk-2.3.1-async.tar.gz -C "$WINE_PATH/.wine/drive_c/windows/" &>>"${LOG_PATH}_wineboot.txt"
+                sleep 1
+                box64 wineserver -k 2>/dev/null
+                "${taskset[@]}" box64 "$wine" explorer /desktop=shell,640x480 start /unix /data/data/com.termux/files/usr/glibc/opt/prefix/mesa/turnip-v6.5.bat &>>"${LOG_PATH}_wineboot.txt"
+            else
+                "${taskset[@]}" box64 "$wine" explorer /desktop=shell,640x480 start /unix /data/data/com.termux/files/usr/glibc/opt/prefix/d3d/wined3d-8.0.2.bat &>>"${LOG_PATH}_wineboot.txt"
+            fi
+        fi
+        
+        box64 wineserver -k 2>/dev/null
+        echo "disable" > "$WINEPREFIX/.update-timestamp"
+    } 2>/dev/null
+}
+
+build_wine
+
+mkdir -p "$WINEPREFIX/winemeta"
+[ ! -f "$WINEPREFIX/winemeta/services-fix-applied" ] && {
+    taskset -c "$PRIMARY_CORES" "$GLIBC_BIN/box64" "$GLIBC_BIN/wine" regedit /data/data/com.termux/files/usr/glibc/opt/prefix/fix-services.reg &>/dev/null
+    sleep 5
+    "$GLIBC_BIN/box64" "$GLIBC_BIN/wineserver" -k &>/dev/null
+    touch "$WINEPREFIX/winemeta/services-fix-applied"
+}
+
+[ ! -f "$WINEPREFIX/winemeta/fonts-fix-applied" ] && {
+    tar -xf /data/data/com.termux/files/usr/glibc/opt/prefix/fix-fonts.tar.xz -C "$WINEPREFIX/drive_c/windows" &>/dev/null
+    touch "$WINEPREFIX/winemeta/fonts-fix-applied"
+}
+
+[ -n "$f5taskmgr" ] && pgrep f5taskmgr.exe >/dev/null && {
+    eval "LC_ALL='$(cat /data/data/com.termux/files/usr/glibc/opt/locale.conf)' ${taskset[@]} box64 $wine ${resolution[@]} '/data/data/com.termux/files/usr/glibc/opt/apps/f5taskmgr.exe' $out &" 2>/dev/null
+}
+
+export PULSE_SERVER=127.0.0.1
+ln -sf $(df -H | grep -o "/storage/....-....") "$WINEPREFIX/dosdevices/f:" &>/dev/null
+
+LC_ALL="$(cat /data/data/com.termux/files/usr/glibc/opt/locale.conf)" \
+    ${taskset[@]} box64 $wine ${wine_args[@]} ${resolution[@]} "$@" &>>"$LOG_PATH"
+
+{
+    INTERVAL=2 
+    SERVICES_START_WAIT=3 
+
+    terminate_process() {
+        local PROCESS_NAME="$1"
+        local PIDS=($(pgrep -x "$PROCESS_NAME" 2>/dev/null))
+        for PID in "${PIDS[@]}"; do
+            kill -SIGTERM "$PID" 2>/dev/null
+            sleep 0.5
+            kill -SIGKILL "$PID" 2>/dev/null
+        done
+    }
+
+    wait_for_wineboot() {
+        while pgrep -f "wineboot" > /dev/null; do
+            sleep 1
+        done
+        sleep 5
+    }
+
+    main_loop() {
+        while true; do
+            if pgrep -x "services.exe" > /dev/null; then
+                local WAITED=0
+                while [ "$WAITED" -lt "$SERVICES_START_WAIT" ]; do
+                    sleep 1
+                    WAITED=$((WAITED + 1))
+                    pgrep -x "winecfg.exe" > /dev/null && break
+                done
+                pgrep -x "winecfg.exe" > /dev/null || terminate_process "services.exe"
+            fi
+            sleep "$INTERVAL"
+        done
+    }
+
+    wait_for_wineboot
+    main_loop &
+    trap "kill -TERM $! 2>/dev/null; exit 0" SIGINT SIGTERM
+    wait $! 2>/dev/null
+} &>/dev/null
