@@ -99,9 +99,15 @@ echo -e "${BOLD}是否需要安装DarkOS解码支持? (${GREEN}y${NC}/${RED}n${N
 read -r -n 1 -t 15 user_input
 echo
 if [[ "$user_input" =~ [yY] ]]; then
-    check_file "/sdcard/lib.tar.xz"
+    check_file "/sdcard/lib.tar.gz"  # 修改为检查tar.gz文件
     check_extract_path "/data/data/com.termux/files/usr/glibc/"
-    extract_file "/sdcard/lib.tar.xz" "/data/data/com.termux/files/usr/glibc/"
+    echo -e "${YELLOW}正在解压 lib.tar.gz 到 /data/data/com.termux/files/usr/glibc/...${NC}"
+    if tar -zxf "/sdcard/lib.tar.gz" -C "/data/data/com.termux/files/usr/glibc/" &>/dev/null; then
+        echo -e "${GREEN}✓ 解压成功${NC}"
+    else
+        echo -e "${RED}错误：解压失败！请检查文件是否损坏或路径是否正确。${NC}"
+        exit 1
+    fi
 else
     echo -e "${YELLOW}⚠ 已跳过解码模块安装${NC}"
 fi
