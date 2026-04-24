@@ -1,4 +1,4 @@
-#linbox-fox
+@afei-mod
 用afei项目:linbox 对其进行一定程度的压缩和删减，同时做一些个人优化。不喜欢请支持正主Afeimod
   感谢mobox开发人员，darkos的支持，感谢咔咔龙，Afei，Asai，deemo等大佬支持和指导
 
